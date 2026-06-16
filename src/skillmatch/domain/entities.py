@@ -7,7 +7,7 @@ without any Streamlit or Plotly dependencies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 
@@ -26,12 +26,14 @@ class CompatibilityResult:
     """Result of the compatibility calculation.
 
     * ``percentage`` – integer 0‑100
-    * ``matched`` – list of skill strings present in both offer and profile
+    * ``matched`` – list of skill strings present in both offer and profile (full match)
+    * ``weak`` – list of required skills detected only in weak/limited context
     * ``missing`` – list of skills required by the offer but absent from the profile
     * ``recommendations`` – short strings suggesting what to learn next
     """
 
     percentage: int
     matched: List[str]
+    weak: List[str]
     missing: List[str]
-    recommendations: List[str]
+    recommendations: List[str] = field(default_factory=list)

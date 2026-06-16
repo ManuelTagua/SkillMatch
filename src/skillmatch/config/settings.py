@@ -17,6 +17,8 @@ SKILL_CATEGORIES = {
         "c",
         "c++",
         "c#",
+        "html",
+        "css",
         "javascript",
         "typescript",
         "php",
@@ -44,7 +46,7 @@ SKILL_CATEGORIES = {
     },
     "DevOps": {"docker", "kubernetes", "jenkins", "github actions", "gitlab ci"},
     "Cloud": {"aws", "azure", "gcp"},
-    "Tools": {"git", "linux", "postman", "kafka", "rabbitmq"},
+    "Tools": {"git", "linux", "postman", "kafka", "rabbitmq", "restapi"},
     "Testing": {"junit", "pytest", "nunit"},
     "Soft Skills": {"teamwork", "communication", "leadership", "problem solving"},
 }
@@ -68,6 +70,9 @@ SKILL_ALIASES = {
     "gcp": "gcp",
     "github": "git",
     "gitlab": "git",
+    "restapi": "restapi",
+    "rest-api": "restapi",
+    "spring": "springboot",
 }
 
 # ---------------------------------------------------------------------------
@@ -82,6 +87,7 @@ SKILL_SYNONYMS = {
     "vue": {"vuejs"},
     "docker": {"container"},
     "kubernetes": {"k8s"},
+    "restapi": {"rest api", "restful api"},
 }
 
 # ---------------------------------------------------------------------------

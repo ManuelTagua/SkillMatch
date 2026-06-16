@@ -1,332 +1,666 @@
-"""Polished Streamlit UI for SkillMatch (v3).
-
-Features added in this iteration:
-* Onboarding overlay explaining the app purpose and usage.
-* "How it works" expander in the sidebar.
-* Enhanced demo mode with selectable job offers and candidate profiles, each with a short description.
-* Natural‑language recommendations that include priority levels.
-* Interview‑preparation suggestions and a concise learning roadmap.
-* Clean visual hierarchy and spacing.
-"""
+"""Streamlit UI for AI-assisted SkillMatch analysis."""
 
 from __future__ import annotations
 
 import json
-import pathlib
-from typing import Dict, List, Tuple
+from html import escape
+from typing import Dict, List
 
 import streamlit as st
 
-from ..domain.services import extract_skills, calculate_compatibility
+from ..ai.gemini_client import GeminiClient, GeminiExtractionError
+from ..ai.schemas import AIAnalysisGuidance, AICompatibilityScore
+from ..ai.scoring import score_ai_compatibility
 from ..domain.entities import CompatibilityResult
-from .plotters import compatibility_bar, skill_pie, category_radar
 
-# ---------------------------------------------------------------------------
-# Configuration – demo data paths and interview/question templates
-# ---------------------------------------------------------------------------
-DEMO_DIR = pathlib.Path(__file__).parents[3] / "data" / "demo"
-DEMO_JOBS = {
-    "Junior Backend Java": {
-        "file": DEMO_DIR / "junior_backend_java.txt",
-        "desc": "Classic Java backend role – Spring Boot, Docker, MySQL.",
-    },
-    "Junior Python Developer": {
-        "file": DEMO_DIR / "junior_python_developer.txt",
-        "desc": "Python backend – Flask/FastAPI, PostgreSQL, Docker.",
-    },
-    "Full‑Stack Junior": {
-        "file": DEMO_DIR / "fullstack_junior.txt",
-        "desc": "React front‑end plus Python/Node back‑end, DBs, Docker.",
-    },
-}
-DEMO_PROFILES = {
-    "Manuel (Full‑Stack)": {
-        "file": DEMO_DIR / "manuel_profile.txt",
-        "desc": "Manuel's real CV – mixes Python, JavaScript, Docker, Git.",
-    }
+
+CATEGORY_ORDER = [
+    "Programming Languages",
+    "Frameworks",
+    "Databases",
+    "DevOps",
+    "Tools",
+    "Testing",
+    "Cloud",
+    "Soft Skills",
+]
+
+SKILL_LABELS = {
+    "restapi": "REST API",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "html": "HTML",
+    "css": "CSS",
+    "aws": "AWS",
+    "gcp": "GCP",
+    "sql server": "SQL Server",
 }
 
-# Simple interview question bank per category (can be expanded later)
-INTERVIEW_QUESTIONS: Dict[str, List[str]] = {
-    "Programming Languages": [
-        "Explain the differences between static and dynamic typing.",
-        "When would you choose Java over Python?",
-    ],
-    "Frameworks": [
-        "What are the main advantages of using Spring Boot?",
-        "How does FastAPI achieve high performance?",
-    ],
-    "DevOps": ["Describe the purpose of Docker containers.", "What is Kubernetes and when would you use it?"],
-    "Databases": ["When would you prefer NoSQL over a relational database?"],
-    "Soft Skills": ["Give an example of a time you demonstrated teamwork."],
+SCORE_BANDS = {
+    "low": {"label": "Low", "color": "#ef4444"},
+    "potential": {"label": "Potential", "color": "#f97316"},
+    "good": {"label": "Good", "color": "#eab308"},
+    "strong": {"label": "Strong", "color": "#22c55e"},
+    "neutral": {"label": "Not scored", "color": "#94a3b8"},
 }
 
-# ---------------------------------------------------------------------------
-# Helper utilities
-# ---------------------------------------------------------------------------
-def _priority_label(weight: float) -> str:
-    if weight >= 0.20:
-        return "High"
-    if weight >= 0.10:
-        return "Medium"
-    return "Low"
 
-def _load_demo(file_path: pathlib.Path) -> str:
-    return file_path.read_text(encoding="utf-8")
-
-def _display_onboarding() -> None:
-    """Render the landing hero section with a clear headline and value proposition.
-
-    The hero occupies the top of the app, giving recruiters an immediate sense of
-    purpose and professionalism within a few seconds.
-    """
-    st.title("SkillMatch – Match Jobs to Talent Instantly")
-    st.subheader("Instantly see how a candidate fits a role, discover skill gaps, and get a clear learning roadmap.")
-    st.info(
-        "*Paste a job description on the left and a candidate profile on the right, then click **Analyze**.\n"
-        "The dashboard instantly shows a compatibility score, matched & missing skills,\n"
-        "priority‑ranked recommendations, interview tips, and a concise learning path.*"
+def _inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.6rem;
+            padding-bottom: 3rem;
+            max-width: 1120px;
+        }
+        section[data-testid="stSidebar"] .block-container {
+            padding-top: 1.2rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li {
+            font-size: 0.88rem;
+            line-height: 1.45;
+        }
+        .ai-status {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: rgba(148, 163, 184, 0.06);
+            border-radius: 8px;
+            padding: 0.8rem 0.85rem;
+            margin-bottom: 0.75rem;
+        }
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.92rem;
+            font-weight: 650;
+        }
+        .status-detail {
+            color: rgba(148, 163, 184, 0.95);
+            font-size: 0.8rem;
+            margin-top: 0.22rem;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 0.55rem;
+            height: 0.55rem;
+            border-radius: 999px;
+            background: #22c55e;
+            box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+        }
+        .status-missing .status-dot {
+            background: #f97316;
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+        }
+        .skillmatch-hero {
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(148, 163, 184, 0.055);
+            border-radius: 8px;
+            padding: 1.2rem 1.35rem;
+            margin-bottom: 1rem;
+        }
+        .skillmatch-hero h1 {
+            margin: 0 0 0.35rem 0;
+            font-size: 2.15rem;
+            line-height: 1.15;
+            letter-spacing: 0;
+        }
+        .skillmatch-hero p {
+            margin: 0;
+            color: rgba(148, 163, 184, 0.95);
+            font-size: 1.02rem;
+            max-width: 720px;
+        }
+        div[data-testid="stTextArea"] textarea {
+            border-radius: 8px;
+            border-color: rgba(148, 163, 184, 0.28);
+            font-size: 0.94rem;
+        }
+        div[data-testid="stButton"] > button {
+            border-radius: 8px;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            background: rgba(226, 232, 240, 0.92);
+            color: #0f172a;
+            font-weight: 650;
+            min-height: 2.8rem;
+            margin-top: 0.25rem;
+        }
+        div[data-testid="stButton"] > button:hover {
+            border-color: rgba(226, 232, 240, 0.65);
+            background: #f8fafc;
+            color: #020617;
+        }
+        .score-card {
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(148, 163, 184, 0.08);
+            border-radius: 8px;
+            padding: 0.95rem;
+            min-height: 116px;
+        }
+        .score-card-primary {
+            background: rgba(226, 232, 240, 0.11);
+            border-color: rgba(226, 232, 240, 0.34);
+            min-height: 128px;
+        }
+        .score-card-accent {
+            height: 4px;
+            border-radius: 999px;
+            margin: 0.2rem 0 0.7rem 0;
+        }
+        .score-card-label {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0;
+            color: rgba(148, 163, 184, 0.95);
+            margin-bottom: 0.45rem;
+        }
+        .score-card-value {
+            font-size: 2rem;
+            line-height: 1;
+            font-weight: 700;
+            margin-bottom: 0.65rem;
+        }
+        .score-card-primary .score-card-value {
+            font-size: 2.65rem;
+        }
+        .score-pill {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.18rem 0.55rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #020617;
+        }
+        .mode-banner {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 8px;
+            padding: 0.8rem 1rem;
+            margin: 0.65rem 0 1rem 0;
+            background: rgba(34, 197, 94, 0.08);
+            font-size: 0.94rem;
+        }
+        .assessment-card {
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(148, 163, 184, 0.06);
+            border-radius: 8px;
+            padding: 1.1rem 1.2rem;
+            margin: 0.8rem 0 1rem 0;
+        }
+        .assessment-card h2 {
+            margin: 0 0 0.35rem 0;
+            letter-spacing: 0;
+        }
+        .assessment-card p {
+            margin: 0;
+            color: rgba(148, 163, 184, 0.95);
+        }
+        .skill-chip {
+            display: inline-block;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 999px;
+            padding: 0.3rem 0.68rem;
+            margin: 0.16rem 0.2rem 0.16rem 0;
+            background: rgba(148, 163, 184, 0.08);
+            font-size: 0.88rem;
+            line-height: 1.4;
+        }
+        .chip-strong {
+            border-color: rgba(34, 197, 94, 0.45);
+            background: rgba(34, 197, 94, 0.1);
+        }
+        .chip-weak {
+            border-color: rgba(234, 179, 8, 0.5);
+            background: rgba(234, 179, 8, 0.12);
+        }
+        .chip-missing {
+            border-color: rgba(239, 68, 68, 0.45);
+            background: rgba(239, 68, 68, 0.1);
+        }
+        .category-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 0.75rem;
+            margin-bottom: 0.2rem;
+        }
+        .category-name {
+            font-weight: 600;
+        }
+        .category-score {
+            color: rgba(148, 163, 184, 0.95);
+            font-variant-numeric: tabular-nums;
+        }
+        .empty-state {
+            border: 1px dashed rgba(148, 163, 184, 0.32);
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            margin-top: 1.2rem;
+            background: rgba(148, 163, 184, 0.05);
+        }
+        .empty-state h3 {
+            margin: 0 0 0.4rem 0;
+            letter-spacing: 0;
+        }
+        .empty-state p {
+            margin: 0;
+            color: rgba(148, 163, 184, 0.95);
+        }
+        [data-testid="stExpander"] {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            background: rgba(148, 163, 184, 0.04);
+        }
+        div[data-testid="stDownloadButton"] > button {
+            border-radius: 8px;
+            border-color: rgba(148, 163, 184, 0.28);
+            min-height: 2.65rem;
+            font-weight: 600;
+        }
+        @media (max-width: 760px) {
+            .block-container {
+                padding-top: 1rem;
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            .skillmatch-hero {
+                padding: 1rem;
+            }
+            .skillmatch-hero h1 {
+                font-size: 1.75rem;
+            }
+            .score-card,
+            .score-card-primary {
+                min-height: 104px;
+            }
+            .score-card-value,
+            .score-card-primary .score-card-value {
+                font-size: 2rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    st.markdown("---")
 
-def _sidebar_how_it_works() -> None:
+
+def _score_band(score: int | float | None) -> Dict[str, str]:
+    if score is None:
+        return SCORE_BANDS["neutral"]
+    if score <= 25:
+        return SCORE_BANDS["low"]
+    if score <= 50:
+        return SCORE_BANDS["potential"]
+    if score <= 75:
+        return SCORE_BANDS["good"]
+    return SCORE_BANDS["strong"]
+
+
+def _score_text(score: int | float | None) -> str:
+    if score is None:
+        return "N/A"
+    return f"{round(score)}%"
+
+
+def _score_card(label: str, score: int | float | None, primary: bool = False) -> None:
+    band = _score_band(score)
+    card_class = "score-card score-card-primary" if primary else "score-card"
+    st.markdown(
+        f"""
+        <div class="{card_class}">
+            <div class="score-card-label">{escape(label)}</div>
+            <div class="score-card-accent" style="background:{band['color']}"></div>
+            <div class="score-card-value">{_score_text(score)}</div>
+            <span class="score-pill" style="background:{band['color']}">{band['label']}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _skill_label(skill: str) -> str:
+    return SKILL_LABELS.get(skill.lower(), skill.title())
+
+
+def _sorted_skills(skills: List[str]) -> List[str]:
+    return sorted(skills, key=_skill_label)
+
+
+def _skill_chips(skills: List[str], chip_class: str) -> str:
+    return "".join(
+        f'<span class="skill-chip {chip_class}">{escape(_skill_label(skill))}</span>'
+        for skill in _sorted_skills(skills)
+    )
+
+
+def _result_from_ai_score(score: AICompatibilityScore) -> CompatibilityResult:
+    return CompatibilityResult(
+        percentage=score.final_score,
+        matched=score.strong_skills,
+        weak=score.weak_skills,
+        missing=score.missing_skills,
+        recommendations=score.recommendations,
+    )
+
+
+def _final_assessment(percentage: int, has_weak: bool = False) -> tuple[str, str]:
+    if percentage >= 76:
+        return "Strong Match", "The profile covers most of the role requirements."
+    if percentage >= 51:
+        return "Good Match", "The profile aligns with several important role requirements."
+    if percentage >= 26:
+        return "Potential Match", "Relevant foundations are present, with gaps to close."
+    return "Low Match", "The profile has limited evidence for this role."
+
+
+def _display_saas_onboarding() -> None:
+    st.markdown(
+        """
+        <div class="skillmatch-hero">
+            <h1>SkillMatch</h1>
+            <p>AI-powered candidate screening with transparent scoring and hiring insights.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _ai_status_panel() -> GeminiClient:
+    client = GeminiClient()
+    status_class = "status-ready" if client.is_configured else "status-missing"
+    status_label = "Gemini connected" if client.is_configured else "Gemini required"
+    status_detail = (
+        "AI extraction active"
+        if client.is_configured
+        else "Set GEMINI_API_KEY or GOOGLE_API_KEY"
+    )
+    st.sidebar.markdown(
+        f"""
+        <div class="ai-status {status_class}">
+            <div class="status-row">
+                <span class="status-dot"></span>
+                <span>{escape(status_label)}</span>
+            </div>
+            <div class="status-detail">{escape(status_detail)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return client
+
+
+def _sidebar_how_it_works_panel() -> None:
     with st.sidebar.expander("How it works", expanded=False):
         st.markdown(
-            "1️⃣ **Paste a job offer** – copy the description from LinkedIn, Indeed, etc.\n"
-            "2️⃣ **Paste a candidate profile** – upload your CV, a list of skills, or a personal summary.\n"
-            "3️⃣ **Click Analyze** – the engine extracts skills, scores the match, and classifies gaps.\n"
-            "4️⃣ **Review results** – see the compatibility percentage, matched/missing skills,\n"
-            "   priority‑ranked recommendations, interview preparation tips, and a learning roadmap."
+            "1. Paste a job description.\n"
+            "2. Paste a candidate profile or CV.\n"
+            "3. Gemini extracts structured requirements.\n"
+            "4. Python calculates skills, experience and seniority scores.\n"
+            "5. Review hiring insights and recommendations."
         )
 
-def _sidebar_demo_selector() -> Tuple[str, str]:
-    st.sidebar.markdown("## Demo mode (optional)")
-    st.sidebar.caption("Select one of the predefined examples to quickly test the app.")
-    job_option = st.sidebar.selectbox(
-        "Job offer", ["-- none --"] + list(DEMO_JOBS.keys()), index=0
+
+def _display_mode_banner() -> None:
+    st.markdown(
+        '<div class="mode-banner">AI-assisted analysis: Gemini extracts structured role data, then Python calculates the score.</div>',
+        unsafe_allow_html=True,
     )
-    profile_option = st.sidebar.selectbox(
-        "Candidate profile", ["-- none --"] + list(DEMO_PROFILES.keys()), index=0
-    )
-    return job_option, profile_option
 
-def _display_demo_explanations(job_key: str, profile_key: str) -> None:
-    if job_key != "-- none --":
-        st.info(f"**Job demo:** {DEMO_JOBS[job_key]['desc']}")
-    if profile_key != "-- none --":
-        st.info(f"**Profile demo:** {DEMO_PROFILES[profile_key]['desc']}")
 
-def _display_metrics(result: CompatibilityResult, category_scores: Dict[str, float]) -> None:
-    """Display the top‑level metrics in a visual card layout.
-
-    The three primary numbers – compatibility score, matched skill count and
-    missing skill count – are shown side‑by‑side with prominent styling. The
-    compatibility metric uses a background colour that reflects the overall
-    match quality (green → excellent, red → poor)."""
-    col1, col2, col3 = st.columns(3)
-    # Compatibility card with colour cue
-    if result.percentage >= 90:
-        comp_color = "#d4edda"  # light green
-    elif result.percentage >= 75:
-        comp_color = "#c3e6cb"  # green
-    elif result.percentage >= 60:
-        comp_color = "#ffeeba"  # light orange
-    elif result.percentage >= 40:
-        comp_color = "#f8d7da"  # light red
-    else:
-        comp_color = "#f5c6cb"  # darker red
+def _display_score_summary(result: CompatibilityResult, score: AICompatibilityScore) -> None:
+    st.subheader("Result summary")
+    col1, col2, col3, col4 = st.columns([1.35, 1, 1, 1], gap="medium")
     with col1:
-        st.markdown(f"<div style='background:{comp_color};padding:10px;border-radius:5px'>", unsafe_allow_html=True)
-        st.metric("Compatibility", f"{result.percentage}%")
-        st.markdown("</div>", unsafe_allow_html=True)
-    # Matched skills card
+        _score_card("Final Score", score.final_score, primary=True)
     with col2:
-        st.markdown("<div style='background:#e2e3e5;padding:10px;border-radius:5px'>", unsafe_allow_html=True)
-        st.metric("Matched skills", len(result.matched))
-        st.markdown("</div>", unsafe_allow_html=True)
-    # Missing skills card
+        _score_card("Skills Score", score.skills_score)
     with col3:
-        st.markdown("<div style='background:#f8d7da;padding:10px;border-radius:5px'>", unsafe_allow_html=True)
-        st.metric("Missing skills", len(result.missing))
-        st.markdown("</div>", unsafe_allow_html=True)
+        _score_card("Experience Score", score.experience_score)
+    with col4:
+        _score_card("Seniority Score", score.seniority_score)
+    st.caption(f"Candidate level: {score.candidate_seniority} | Role level: {score.role_seniority}")
 
 
-def _final_assessment(percentage: int) -> Tuple[str, str]:
-    if percentage >= 90:
-        return "Excellent Match", "Your profile aligns very closely with the job requirements."
-    if percentage >= 75:
-        return "Strong Match", "You cover most of the core skills required."
-    if percentage >= 60:
-        return "Potential Match", "There are a few gaps to address for a stronger fit."
-    if percentage >= 40:
-        return "Weak Match", "Significant skill gaps exist; consider upskilling."
-    return "Poor Match", "The current profile does not meet the majority of required skills."
+def _display_assessment_card(level: str, explanation: str) -> None:
+    st.markdown(
+        f"""
+        <div class="assessment-card">
+            <h2>{escape(level)}</h2>
+            <p>{escape(explanation)}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-def _recommendations_by_priority(
-    missing: List[str],
-    offer_cat: Dict[str, List[str]],
-    category_weights: Dict[str, float],
-) -> List[Tuple[str, str]]:
-    recs: List[Tuple[str, str]] = []
-    skill_weights: Dict[str, float] = {}
-    for cat, skills in offer_cat.items():
-        w = category_weights.get(cat, 0.0)
-        for sk in skills:
-            if sk in missing:
-                skill_weights[sk] = w
-    for skill, weight in sorted(skill_weights.items(), key=lambda x: -x[1])[:3]:
-        priority = _priority_label(weight)
-        recs.append((priority, f"Learn **{skill.title()}** ({priority} priority) to boost compatibility."))
-    return recs
 
-def _display_recommendations(recs: List[Tuple[str, str]]) -> None:
-    st.subheader("Recommendations (by priority)")
-    for _, text in recs:
-        st.write(text)
+def _display_skill_card(
+    title: str,
+    skills: List[str],
+    chip_class: str,
+    empty_message: str,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"### {title} ({len(skills)})")
+        if skills:
+            st.markdown(_skill_chips(skills, chip_class), unsafe_allow_html=True)
+        else:
+            st.info(empty_message)
 
-def _interview_preparation(missing: List[str], offer_cat: Dict[str, List[str]]) -> None:
-    st.subheader("Interview preparation tips")
-    missing_cats = {cat for cat, skills in offer_cat.items() if any(s in missing for s in skills)}
-    tips: List[str] = []
-    for cat in missing_cats:
-        tips.extend(INTERVIEW_QUESTIONS.get(cat, []))
-    if tips:
-        st.markdown("*Possible interview questions to study:*")
-        for t in tips[:5]:
-            st.write(f"- {t}")
-    else:
-        st.info("All core categories are covered – focus on soft‑skill questions.")
 
-def _learning_roadmap(recs: List[Tuple[str, str]]) -> None:
-    if not recs:
+def _display_why_card(sentences: List[str]) -> None:
+    with st.container(border=True):
+        st.markdown("### Why This Score")
+        for sentence in sentences[:3]:
+            st.write(sentence)
+
+
+def _display_result_sections(result: CompatibilityResult, why_sentences: List[str]) -> None:
+    st.subheader("Skill analysis")
+    col_match, col_weak, col_missing = st.columns(3, gap="medium")
+    with col_match:
+        _display_skill_card(
+            "Strong Matches",
+            result.matched,
+            "chip-strong",
+            "No strong matches detected.",
+        )
+    with col_weak:
+        _display_skill_card(
+            "Partial Matches",
+            result.weak,
+            "chip-weak",
+            "No partial matches detected.",
+        )
+    with col_missing:
+        missing_empty = (
+            "No completely missing skills, but some skills are only partial."
+            if result.weak
+            else "No missing skills detected."
+        )
+        _display_skill_card("Missing Skills", result.missing, "chip-missing", missing_empty)
+    _display_why_card(why_sentences)
+
+
+def _display_category_progress(category_scores: Dict[str, float]) -> None:
+    st.subheader("Category breakdown")
+    st.caption("Role fit by skill category.")
+    left, right = st.columns(2, gap="medium")
+    columns = [left, right]
+    for index, category in enumerate(CATEGORY_ORDER):
+        score = float(category_scores.get(category, 0.0))
+        band = _score_band(score)
+        with columns[index % 2]:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div class="category-row">
+                        <span class="category-name">{escape(category)}</span>
+                        <span class="category-score">{round(score)}%</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.progress(min(max(score / 100, 0), 1), text=band["label"])
+
+
+def _display_empty_state(is_configured: bool) -> None:
+    mode_note = (
+        "AI analysis will score skills, experience, and seniority with Gemini extraction."
+        if is_configured
+        else "AI analysis requires Gemini. Add GEMINI_API_KEY or GOOGLE_API_KEY to enable analysis."
+    )
+    st.markdown(
+        f"""
+        <div class="empty-state">
+            <h3>Ready for analysis</h3>
+            <p>{escape(mode_note)} Add both texts above and run the comparison.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _display_ai_guidance(guidance: AIAnalysisGuidance) -> None:
+    if not (guidance.recommendations or guidance.interview_tips or guidance.roadmap):
         return
-    st.subheader("Suggested learning roadmap")
-    steps = [text.split("**")[1].split("**")[0] for _, text in recs]
-    for idx, skill in enumerate(steps, start=1):
-        st.markdown(f"{idx}. **{skill}** – start with tutorials or official docs.")
-    st.caption("After mastering the above, consider exploring adjacent technologies for deeper expertise.")
+    st.subheader("Hiring guidance")
+    col1, col2, col3 = st.columns(3, gap="medium")
+    if guidance.recommendations:
+        with col1:
+            with st.container(border=True):
+                st.markdown("### Recommendations")
+                for item in guidance.recommendations[:3]:
+                    st.write(f"- {item}")
+    if guidance.interview_tips:
+        with col2:
+            with st.container(border=True):
+                st.markdown("### Interview tips")
+                for item in guidance.interview_tips[:4]:
+                    st.write(f"- {item}")
+    if guidance.roadmap:
+        with col3:
+            with st.container(border=True):
+                st.markdown("### Learning roadmap")
+                for idx, item in enumerate(guidance.roadmap[:5], start=1):
+                    st.write(f"{idx}. {item}")
+
 
 def _export_results(result: CompatibilityResult, job_text: str, profile_text: str) -> None:
-    st.subheader("Export analysis")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Export as Markdown"):
-            md = (
-                f"# SkillMatch Analysis\n\n"
-                f"**Job description**\n\n```\n{job_text}\n```\n\n"
-                f"**Candidate profile**\n\n```\n{profile_text}\n```\n\n"
-                f"**Compatibility:** {result.percentage}%\n\n"
-                f"**Matched skills**: {', '.join(result.matched)}\n"
-                f"**Missing skills**: {', '.join(result.missing)}\n"
-                f"**Recommendations**:\n"
-                + "\n".join([f"- {r}" for r in result.recommendations])
-                + "\n"
-            )
+    md = (
+        f"# SkillMatch Analysis\n\n"
+        f"**Job description**\n\n```\n{job_text}\n```\n\n"
+        f"**Candidate profile**\n\n```\n{profile_text}\n```\n\n"
+        f"**Compatibility:** {result.percentage}%\n\n"
+        f"**Strong matches:** {', '.join(_skill_label(s) for s in _sorted_skills(result.matched))}\n"
+        f"**Weak matches:** {', '.join(_skill_label(s) for s in _sorted_skills(result.weak))}\n"
+        f"**Missing skills:** {', '.join(_skill_label(s) for s in _sorted_skills(result.missing))}\n"
+        f"**Recommendations:**\n"
+        + "\n".join([f"- {r}" for r in result.recommendations])
+        + "\n"
+    )
+    payload = {
+        "job": job_text,
+        "profile": profile_text,
+        "percentage": result.percentage,
+        "matched": result.matched,
+        "weak": result.weak,
+        "missing": result.missing,
+        "recommendations": result.recommendations,
+    }
+    with st.container(border=True):
+        st.markdown("### Export analysis")
+        col1, col2 = st.columns(2, gap="medium")
+        with col1:
             st.download_button(
                 label="Download Markdown",
                 data=md,
                 file_name="skillmatch_report.md",
                 mime="text/markdown",
+                use_container_width=True,
             )
-    with col2:
-        if st.button("Export as JSON"):
-            payload = {
-                "job": job_text,
-                "profile": profile_text,
-                "percentage": result.percentage,
-                "matched": result.matched,
-                "missing": result.missing,
-                "recommendations": result.recommendations,
-            }
+        with col2:
             st.download_button(
                 label="Download JSON",
                 data=json.dumps(payload, indent=2),
                 file_name="skillmatch_report.json",
                 mime="application/json",
+                use_container_width=True,
             )
 
-# ---------------------------------------------------------------------------
-# Main app entry point
-# ---------------------------------------------------------------------------
+
 def run() -> None:
     st.set_page_config(page_title="SkillMatch", layout="wide", initial_sidebar_state="expanded")
-    _sidebar_how_it_works()
-    job_key, profile_key = _sidebar_demo_selector()
-    _display_onboarding()
-    job_text = ""
-    profile_text = ""
-    if job_key != "-- none --":
-        job_text = _load_demo(DEMO_JOBS[job_key]["file"])
-    if profile_key != "-- none --":
-        profile_text = _load_demo(DEMO_PROFILES[profile_key]["file"])
-    if job_key != "-- none --" or profile_key != "-- none --":
-        _display_demo_explanations(job_key, profile_key)
+    _inject_styles()
+
+    gemini_client = _ai_status_panel()
+    _sidebar_how_it_works_panel()
+    _display_saas_onboarding()
+
     col1, col2 = st.columns(2)
     with col1:
         job_input = st.text_area(
             "Job description",
-            value=job_text,
-            height=250,
+            value="",
+            height=260,
             placeholder="Paste the full job posting here...",
         )
     with col2:
         profile_input = st.text_area(
             "Candidate profile",
-            value=profile_text,
-            height=250,
+            value="",
+            height=260,
             placeholder="Paste a CV, skill list, or personal summary...",
         )
-    if st.button("Analyze"):
-        if not job_input.strip() or not profile_input.strip():
-            st.warning("Both the job description and candidate profile must contain text.")
-            return
-        offer_set, offer_cat = extract_skills(job_input)
-        profile_set, profile_cat = extract_skills(profile_input)
-        result = calculate_compatibility(offer_set, profile_set, offer_cat, profile_cat)
-        category_weights = {
-            "Programming Languages": 0.25,
-            "Frameworks": 0.20,
-            "DevOps": 0.15,
-            "Cloud": 0.10,
-            "Databases": 0.10,
-            "Tools": 0.05,
-            "Testing": 0.05,
-            "Soft Skills": 0.05,
-        }
-        category_scores = {}
-        for cat in category_weights:
-            offer_sk = offer_cat.get(cat, [])
-            profile_sk = profile_cat.get(cat, [])
-            if not offer_sk:
-                score = 1.0
-            else:
-                score = len(set(offer_sk).intersection(profile_sk)) / len(offer_sk)
-            category_scores[cat] = score
-        _display_metrics(result, category_scores)
-        level, expl = _final_assessment(result.percentage)
-        st.subheader(level)
-        st.write(expl)
-        col_match, col_missing = st.columns(2)
-        with col_match:
-            st.markdown("**Matched skills**")
-            if result.matched:
-                for s in result.matched:
-                    st.write(f"- ✔ {s.title()}")
-            else:
-                st.info("No matches found.")
-        with col_missing:
-            st.markdown("**Missing skills**")
-            if result.missing:
-                for s in result.missing:
-                    st.write(f"- ✘ {s.title()}")
-            else:
-                st.info("No missing skills – perfect match!")
-        st.subheader("Charts")
-        st.plotly_chart(compatibility_bar(result.percentage), use_container_width=True)
-        st.plotly_chart(category_radar(category_scores), use_container_width=True)
-        st.plotly_chart(skill_pie(result.matched, result.missing), use_container_width=True)
-        recs = _recommendations_by_priority(result.missing, offer_cat, category_weights)
-        _display_recommendations(recs)
-        _interview_preparation(result.missing, offer_cat)
-        _learning_roadmap(recs)
-        _export_results(result, job_input, profile_input)
+
+    if not gemini_client.is_configured:
+        st.warning(
+            "AI analysis requires Gemini. Set GEMINI_API_KEY or GOOGLE_API_KEY, then restart the app."
+        )
+
+    analyze = st.button(
+        "Analyze",
+        type="primary",
+        use_container_width=True,
+        disabled=not gemini_client.is_configured,
+    )
+    if not analyze:
+        _display_empty_state(gemini_client.is_configured)
+        return
+
+    if not job_input.strip() or not profile_input.strip():
+        st.warning("Both the job description and candidate profile must contain text.")
+        return
+
+    _display_mode_banner()
+    try:
+        with st.spinner("Running AI-assisted extraction..."):
+            ai_job = gemini_client.extract_job(job_input)
+            ai_candidate = gemini_client.extract_candidate(profile_input)
+            ai_score = score_ai_compatibility(ai_job, ai_candidate)
+            ai_guidance = gemini_client.generate_guidance(ai_job, ai_candidate, ai_score)
+    except GeminiExtractionError:
+        st.error(
+            "AI analysis failed. Gemini may be unavailable, timed out, or returned a malformed response. Please retry later."
+        )
+        return
+
+    result = _result_from_ai_score(ai_score)
+    if ai_guidance.recommendations:
+        result = CompatibilityResult(
+            percentage=result.percentage,
+            matched=result.matched,
+            weak=result.weak,
+            missing=result.missing,
+            recommendations=ai_guidance.recommendations,
+        )
+
+    _display_score_summary(result, ai_score)
+    level, explanation = _final_assessment(result.percentage, bool(result.weak))
+    _display_assessment_card(level, explanation)
+    _display_result_sections(result, ai_score.why_sentences)
+    _display_category_progress(ai_score.category_scores)
+    _display_ai_guidance(ai_guidance)
+    _export_results(result, job_input, profile_input)

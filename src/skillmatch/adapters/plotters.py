@@ -65,7 +65,7 @@ def skill_pie(matched: List[str], missing: List[str]) -> go.Figure:
 def category_radar(category_scores: Dict[str, float]) -> go.Figure:
     """Radar (spider) chart showing match ratio per category.
 
-    ``category_scores`` should contain values between 0 and 1.
+    ``category_scores`` should contain values between 0 and 100.
     """
     categories = list(category_scores.keys())
     scores = [category_scores[c] for c in categories]
@@ -76,7 +76,7 @@ def category_radar(category_scores: Dict[str, float]) -> go.Figure:
         go.Scatterpolar(r=scores, theta=categories, fill="toself", name="Match", line=dict(color="#3498db"))
     )
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1], tickformat=".0%")),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], tickformat="d")),
         showlegend=False,
         margin=dict(l=20, r=20, t=20, b=20),
     )
