@@ -1,0 +1,18 @@
+Junior Python Developer
+
+We are seeking a Junior Python Developer to join our team.
+
+Responsibilities:
+- Write clean Python code for backend services.
+- Use Flask or FastAPI to build REST APIs.
+- Write unit tests with pytest.
+- Work with PostgreSQL databases.
+- Version control with Git.
+- Deploy Docker containers.
+
+Requirements:
+- 1 year of Python experience.
+- Familiarity with Flask or FastAPI.
+- Basic SQL knowledge.
+- Understanding of Docker basics.
+- Good problem‑solving skills.

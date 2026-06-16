@@ -1,0 +1,14 @@
+We are looking for a Junior Backend Java Engineer.
+
+Responsibilities:
+- Develop RESTful APIs using Java and Spring Boot.
+- Write unit tests with JUnit.
+- Collaborate with DevOps team to containerize services using Docker.
+- Participate in code reviews and agile ceremonies.
+
+Requirements:
+- 1-2 years of experience in Java.
+- Familiarity with Spring Framework.
+- Basic understanding of SQL databases (MySQL or PostgreSQL).
+- Knowledge of Git version control.
+- Ability to write clean, maintainable code.

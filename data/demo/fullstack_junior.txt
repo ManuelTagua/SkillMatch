@@ -1,0 +1,19 @@
+Full‑Stack Junior Developer (JavaScript/Python)
+
+We need a motivated junior full‑stack developer.
+
+Responsibilities:
+- Build front‑end features with React.
+- Develop backend services using Python (Flask) and Node.js (Express).
+- Write unit tests (Jest for front‑end, pytest for back‑end).
+- Use PostgreSQL and MongoDB for data storage.
+- Containerise applications with Docker.
+- Work in an Agile team using Git.
+
+Requirements:
+- 1‑2 years of JavaScript (React) experience.
+- 1 year of Python experience.
+- Familiarity with REST APIs.
+- Basic understanding of SQL and NoSQL databases.
+- Experience with Docker.
+- Good communication and teamwork skills.

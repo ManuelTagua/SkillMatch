@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env/
+.env*/
+.venv/
+
+# Streamlit config & local state
+.streamlit/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Distribution / build artifacts
+build/
+Dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
