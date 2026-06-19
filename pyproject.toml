@@ -19,6 +19,9 @@ test = ["pytest", "pytest-cov"]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.package-data]
+"skillmatch.adapters" = ["browser_usage_limit_component/*.html"]
+
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"

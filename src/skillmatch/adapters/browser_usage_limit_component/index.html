@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        height: 0;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      const Streamlit = {
+        ready() {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:componentReady",
+              apiVersion: 1,
+            },
+            "*",
+          );
+        },
+        setFrameHeight(height = 0) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setFrameHeight",
+              height,
+            },
+            "*",
+          );
+        },
+        setComponentValue(value) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setComponentValue",
+              value,
+              dataType: "json",
+            },
+            "*",
+          );
+        },
+      };
+
+      let lastEmittedValue = "";
+      let latestArgs = null;
+      let expiryTimer = null;
+
+      function emit(value) {
+        const serialized = JSON.stringify(value);
+        if (serialized === lastEmittedValue) return;
+        lastEmittedValue = serialized;
+        Streamlit.setComponentValue(value);
+      }
+
+      function emptyState() {
+        return {
+          used: 0,
+          firstUsedAt: null,
+          lastConsumeToken: null,
+        };
+      }
+
+      function normalizeState(value, now, limit, windowMs) {
+        if (!value || typeof value !== "object") return emptyState();
+
+        const used = Number(value.used);
+        const firstUsedAt = Number(value.firstUsedAt);
+        const validUsed = Number.isInteger(used) && used >= 0 && used <= limit;
+        if (!validUsed) return emptyState();
+        if (used === 0) return emptyState();
+
+        const validStart = Number.isFinite(firstUsedAt) && firstUsedAt > 0;
+        const expired = !validStart || now < firstUsedAt || now - firstUsedAt >= windowMs;
+        if (expired) return emptyState();
+
+        return {
+          used,
+          firstUsedAt,
+          lastConsumeToken:
+            typeof value.lastConsumeToken === "string"
+              ? value.lastConsumeToken
+              : null,
+        };
+      }
+
+      function handleRender(args) {
+        const storageKey = String(args.storage_key);
+        const limit = Math.max(Number(args.limit) || 2, 1);
+        const windowMs = Math.max(Number(args.window_ms) || 86400000, 1);
+        const consumeToken =
+          typeof args.consume_token === "string" ? args.consume_token : "";
+        const now = Date.now();
+
+        try {
+          let stored = null;
+          const raw = window.localStorage.getItem(storageKey);
+          if (raw) {
+            try {
+              stored = JSON.parse(raw);
+            } catch (_error) {
+              stored = null;
+            }
+          }
+
+          const state = normalizeState(stored, now, limit, windowMs);
+          if (consumeToken && state.lastConsumeToken !== consumeToken) {
+            if (state.used < limit) {
+              if (state.used === 0) state.firstUsedAt = now;
+              state.used += 1;
+            }
+            state.lastConsumeToken = consumeToken;
+          }
+
+          window.localStorage.setItem(storageKey, JSON.stringify(state));
+          emit({
+            ready: true,
+            used: state.used,
+            remaining: limit - state.used,
+            limit,
+            firstUsedAt: state.firstUsedAt,
+            appliedToken: state.lastConsumeToken,
+          });
+
+          window.clearTimeout(expiryTimer);
+          if (state.used > 0 && state.firstUsedAt) {
+            const timeUntilReset = state.firstUsedAt + windowMs - now;
+            expiryTimer = window.setTimeout(
+              () => handleRender(latestArgs || args),
+              Math.max(timeUntilReset + 50, 50),
+            );
+          }
+        } catch (_error) {
+          emit({ready: false, error: "local_storage_unavailable"});
+        }
+
+        Streamlit.setFrameHeight(0);
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data?.type !== "streamlit:render") return;
+        latestArgs = event.data.args || {};
+        handleRender(latestArgs);
+      });
+
+      Streamlit.ready();
+    </script>
+  </body>
+</html>

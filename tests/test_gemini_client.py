@@ -118,6 +118,28 @@ def test_google_api_key_is_used_when_gemini_key_is_missing(
     assert client.is_configured
 
 
+def test_google_api_key_takes_precedence_over_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+    client = GeminiClient()
+
+    assert client.api_key == "google-key"
+
+
+def test_gemini_api_key_is_used_as_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+    client = GeminiClient()
+
+    assert client.api_key == "gemini-key"
+
+
 def test_generate_guidance_parses_limited_practical_lists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,26 +1,31 @@
-# Python cache
+# Python cache and tooling
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Virtual environments
-venv/
-.env/
-.env*/
+# Local environments and secrets
+.env
 .venv/
+venv/
+.streamlit/secrets.toml
 
-# Streamlit config & local state
-.streamlit/
-
-# Jupyter notebooks checkpoints
-.ipynb_checkpoints/
-
-# Distribution / build artifacts
+# Distribution and build artifacts
+dist/
 build/
-Dist/
 *.egg-info/
 
-# OS files
+# Editors
+.idea/
+.vscode/
+
+# OS and local logs
 .DS_Store
 Thumbs.db
+*.log
+
+# Jupyter notebooks
+.ipynb_checkpoints/

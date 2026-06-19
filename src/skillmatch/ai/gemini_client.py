@@ -81,7 +81,7 @@ class GeminiClient:
         max_retries: int = 2,
         retry_delay: float = 1.0,
     ) -> None:
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
         self.timeout = timeout
         self.max_retries = max_retries
@@ -111,7 +111,7 @@ class GeminiClient:
     def _generate_json(self, prompt: str) -> Dict[str, Any]:
         if not self.is_configured:
             raise GeminiExtractionError(
-                "Gemini API key is not configured. Set GEMINI_API_KEY or GOOGLE_API_KEY."
+                "Gemini API key is not configured. Set GOOGLE_API_KEY or GEMINI_API_KEY."
             )
 
         endpoint = (

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from dataclasses import dataclass
 from html import escape
 from typing import Dict, List
 
@@ -12,6 +14,7 @@ from ..ai.gemini_client import GeminiClient, GeminiExtractionError
 from ..ai.schemas import AIAnalysisGuidance, AICompatibilityScore
 from ..ai.scoring import score_ai_compatibility
 from ..domain.entities import CompatibilityResult
+from .browser_usage_limit import BrowserUsage, get_browser_usage
 
 
 CATEGORY_ORDER = [
@@ -43,6 +46,17 @@ SCORE_BANDS = {
     "strong": {"label": "Strong", "color": "#22c55e"},
     "neutral": {"label": "Not scored", "color": "#94a3b8"},
 }
+
+
+@dataclass(frozen=True)
+class AnalysisView:
+    """Successful analysis retained while the browser confirms quota use."""
+
+    result: CompatibilityResult
+    score: AICompatibilityScore
+    guidance: AIAnalysisGuidance
+    job_text: str
+    profile_text: str
 
 
 def _inject_styles() -> None:
@@ -371,11 +385,11 @@ def _display_saas_onboarding() -> None:
 def _ai_status_panel() -> GeminiClient:
     client = GeminiClient()
     status_class = "status-ready" if client.is_configured else "status-missing"
-    status_label = "Gemini connected" if client.is_configured else "Gemini required"
+    status_label = "AI Connected" if client.is_configured else "AI Configuration Required"
     status_detail = (
         "AI extraction active"
         if client.is_configured
-        else "Set GEMINI_API_KEY or GOOGLE_API_KEY"
+        else "AI service not configured"
     )
     st.sidebar.markdown(
         f"""
@@ -397,7 +411,7 @@ def _sidebar_how_it_works_panel() -> None:
         st.markdown(
             "1. Paste a job description.\n"
             "2. Paste a candidate profile or CV.\n"
-            "3. Gemini extracts structured requirements.\n"
+            "3. Advanced AI extracts structured requirements.\n"
             "4. Python calculates skills, experience and seniority scores.\n"
             "5. Review hiring insights and recommendations."
         )
@@ -405,7 +419,7 @@ def _sidebar_how_it_works_panel() -> None:
 
 def _display_mode_banner() -> None:
     st.markdown(
-        '<div class="mode-banner">AI-assisted analysis: Gemini extracts structured role data, then Python calculates the score.</div>',
+        '<div class="mode-banner">AI-assisted analysis: Advanced language models extract role requirements and Python calculates the compatibility score.</div>',
         unsafe_allow_html=True,
     )
 
@@ -508,9 +522,9 @@ def _display_category_progress(category_scores: Dict[str, float]) -> None:
 
 def _display_empty_state(is_configured: bool) -> None:
     mode_note = (
-        "AI analysis will score skills, experience, and seniority with Gemini extraction."
+        "AI analysis will score skills, experience, and seniority with intelligent extraction."
         if is_configured
-        else "AI analysis requires Gemini. Add GEMINI_API_KEY or GOOGLE_API_KEY to enable analysis."
+        else "AI analysis requires configuration. Configure the AI service to enable analysis."
     )
     st.markdown(
         f"""
@@ -546,6 +560,40 @@ def _display_ai_guidance(guidance: AIAnalysisGuidance) -> None:
                 st.markdown("### Learning roadmap")
                 for idx, item in enumerate(guidance.roadmap[:5], start=1):
                     st.write(f"{idx}. {item}")
+
+
+def _display_usage_status(usage: BrowserUsage, consume_pending: bool) -> None:
+    if usage.error:
+        st.error(
+            "No se puede acceder al contador de este navegador. "
+            "Comprueba que localStorage esté habilitado."
+        )
+        return
+    if not usage.ready:
+        st.caption("Cargando los usos disponibles de este navegador...")
+        return
+
+    st.caption(f"Análisis gratuitos disponibles: {usage.remaining}/{usage.limit}")
+    if usage.is_blocked:
+        st.error(
+            "Has alcanzado el límite de 2 análisis gratuitos en 24 horas. "
+            "Vuelve a intentarlo más tarde."
+        )
+    elif consume_pending:
+        st.caption("Actualizando el contador de usos...")
+
+
+def _display_analysis(view: AnalysisView) -> None:
+    _display_score_summary(view.result, view.score)
+    level, explanation = _final_assessment(
+        view.result.percentage,
+        bool(view.result.weak),
+    )
+    _display_assessment_card(level, explanation)
+    _display_result_sections(view.result, view.score.why_sentences)
+    _display_category_progress(view.score.category_scores)
+    _display_ai_guidance(view.guidance)
+    _export_results(view.result, view.job_text, view.profile_text)
 
 
 def _export_results(result: CompatibilityResult, job_text: str, profile_text: str) -> None:
@@ -599,6 +647,15 @@ def run() -> None:
     _sidebar_how_it_works_panel()
     _display_saas_onboarding()
 
+    pending_token = st.session_state.get("analysis_usage_consume_token")
+    if not isinstance(pending_token, str):
+        pending_token = None
+    usage = get_browser_usage(pending_token)
+    if pending_token and usage.applied_token == pending_token:
+        del st.session_state["analysis_usage_consume_token"]
+        pending_token = None
+    consume_pending = pending_token is not None
+
     col1, col2 = st.columns(2)
     with col1:
         job_input = st.text_area(
@@ -617,17 +674,28 @@ def run() -> None:
 
     if not gemini_client.is_configured:
         st.warning(
-            "AI analysis requires Gemini. Set GEMINI_API_KEY or GOOGLE_API_KEY, then restart the app."
+            "AI service not configured. Add the required environment variable, then restart the app."
         )
+
+    _display_usage_status(usage, consume_pending)
 
     analyze = st.button(
         "Analyze",
         type="primary",
         use_container_width=True,
-        disabled=not gemini_client.is_configured,
+        disabled=(
+            not gemini_client.is_configured
+            or not usage.ready
+            or usage.is_blocked
+            or consume_pending
+        ),
     )
     if not analyze:
-        _display_empty_state(gemini_client.is_configured)
+        last_analysis = st.session_state.get("last_analysis")
+        if isinstance(last_analysis, AnalysisView):
+            _display_analysis(last_analysis)
+        else:
+            _display_empty_state(gemini_client.is_configured)
         return
 
     if not job_input.strip() or not profile_input.strip():
@@ -636,14 +704,15 @@ def run() -> None:
 
     _display_mode_banner()
     try:
-        with st.spinner("Running AI-assisted extraction..."):
+        with st.spinner("Running intelligent analysis..."):
             ai_job = gemini_client.extract_job(job_input)
             ai_candidate = gemini_client.extract_candidate(profile_input)
             ai_score = score_ai_compatibility(ai_job, ai_candidate)
             ai_guidance = gemini_client.generate_guidance(ai_job, ai_candidate, ai_score)
     except GeminiExtractionError:
         st.error(
-            "AI analysis failed. Gemini may be unavailable, timed out, or returned a malformed response. Please retry later."
+            "AI analysis failed. The analysis service may be unavailable, timed out, "
+            "or returned an invalid response. Please retry later."
         )
         return
 
@@ -657,10 +726,12 @@ def run() -> None:
             recommendations=ai_guidance.recommendations,
         )
 
-    _display_score_summary(result, ai_score)
-    level, explanation = _final_assessment(result.percentage, bool(result.weak))
-    _display_assessment_card(level, explanation)
-    _display_result_sections(result, ai_score.why_sentences)
-    _display_category_progress(ai_score.category_scores)
-    _display_ai_guidance(ai_guidance)
-    _export_results(result, job_input, profile_input)
+    st.session_state["last_analysis"] = AnalysisView(
+        result=result,
+        score=ai_score,
+        guidance=ai_guidance,
+        job_text=job_input,
+        profile_text=profile_input,
+    )
+    st.session_state["analysis_usage_consume_token"] = uuid.uuid4().hex
+    st.rerun()
