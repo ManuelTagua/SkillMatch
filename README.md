@@ -4,6 +4,10 @@
 
 La herramienta extrae automáticamente requisitos, habilidades, experiencia y nivel profesional a partir de texto libre, generando un análisis detallado que ayuda tanto a candidatos como a reclutadores a identificar fortalezas, carencias y oportunidades de mejora.
 
+## Demo
+
+https://skillmatch.manueltagua.com
+
 ---
 
 # Características principales
